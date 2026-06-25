@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>사다리타기</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --panel: #ffffff;
+    --line: #c9d2e3;
+    --ladder: #94a3b8;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --text: #1e293b;
+    --muted: #64748b;
+    --gold: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 24px;
+  }
+  h1 { text-align: center; margin: 0 0 4px; font-size: 26px; }
+  .sub { text-align: center; color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  .setup { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .card {
+    flex: 1; min-width: 280px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 16px; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  input[type=text] {
+    flex: 1; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 8px; font-size: 14px;
+  }
+  input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  button {
+    padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer;
+    font-size: 14px; font-weight: 600; transition: .15s;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-add { background: var(--accent-soft); color: var(--accent); }
+  .btn-add:hover:not(:disabled) { background: #e0e7ff; }
+  .btn-done { background: #10b981; color: #fff; }
+  .btn-start {
+    display: block; width: 100%; padding: 14px; font-size: 17px;
+    background: var(--accent); color: #fff; margin: 4px 0 20px;
+  }
+  .btn-start:hover:not(:disabled) { background: #4338ca; }
+  .btn-reset { background: #f1f5f9; color: var(--muted); }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 10px; background: var(--bg); border-radius: 7px; margin-bottom: 6px;
+    font-size: 14px;
+  }
+  ul.list li button { padding: 2px 8px; background: #fee2e2; color: #dc2626; font-size: 12px; }
+  .tag { font-size: 12px; color: var(--muted); }
+  .locked { color: #047857; font-weight: 600; }
+  #board { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  canvas { width: 100%; display: block; }
+  #result { margin-top: 16px; }
+  #result table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  #result th, #result td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+  #result th { color: var(--muted); font-weight: 600; }
+  .hidden { display: none; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🪜 사다리타기</h1>
+  <p class="sub">참여자와 점심값(Goal)을 입력하고 '사다리 시작'을 누르세요</p>
+
+  <div class="setup" id="setup">
+    <div class="card">
+      <h2>참여자 <span class="tag" id="pCount">(0명)</span></h2>
+      <div class="row">
+        <input type="text" id="pInput" placeholder="이름 입력 후 Enter" autocomplete="off">
+        <button class="btn-add" id="pAdd">추가</button>
+        <button class="btn-done" id="pDone">완료</button>
+      </div>
+      <ul class="list" id="pList"></ul>
+      <p class="hint">무한 입력 가능 · '완료'를 누르면 확정됩니다</p>
+    </div>
+
+    <div class="card">
+      <h2>점심값 Goal <span class="tag" id="gCount">(0개)</span></h2>
+      <div class="row">
+        <input type="text" id="gInput" placeholder="예: 5000, 10000원, 꽝 …" autocomplete="off">
+        <button class="btn-add" id="gAdd">추가</button>
+        <button class="btn-done" id="gDone">완료</button>
+      </div>
+      <ul class="list" id="gList"></ul>
+      <p class="hint">금액 무제한 · 개수 자유 · '완료'를 누르면 확정됩니다</p>
+    </div>
+  </div>
+
+  <button class="btn-start" id="startBtn" disabled>사다리 시작</button>
+
+  <div id="board" class="hidden">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div id="result" class="hidden card">
+    <h2>결과</h2>
+    <table>
+      <thead><tr><th>참여자</th><th>→ 점심값</th></tr></thead>
+      <tbody id="resultBody"></tbody>
+    </table>
+    <div class="row" style="margin-top:14px">
+      <button class="btn-reset" id="resetBtn">처음부터 다시</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const participants = [];   // {name}
+  const goals = [];          // {label}
+  let pLocked = false, gLocked = false;
+  let rungs = [];            // 가로줄: {col, y}  col = 왼쪽 세로선 index
+  let paths = [];            // 각 참여자 도착 col
+  let running = false;
+
+  const $ = id => document.getElementById(id);
+
+  // ---------- 입력 관리 ----------
+  function renderList(arr, listEl, countEl, unit, locked, onDel) {
+    listEl.innerHTML = "";
+    arr.forEach((item, i) => {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.textContent = item.name ?? item.label;
+      li.appendChild(span);
+      if (!locked) {
+        const del = document.createElement("button");
+        del.textContent = "삭제";
+        del.onclick = () => onDel(i);
+        li.appendChild(del);
+      }
+      listEl.appendChild(li);
+    });
+    countEl.textContent = locked ? `(${arr.length}${unit} 확정)` : `(${arr.length}${unit})`;
+    if (locked) countEl.className = "tag locked";
+  }
+
+  function refresh() {
+    renderList(participants, $("pList"), $("pCount"), "명", pLocked, i => { participants.splice(i,1); refresh(); });
+    renderList(goals, $("gList"), $("gCount"), "개", gLocked, i => { goals.splice(i,1); refresh(); });
+    $("pInput").disabled = $("pAdd").disabled = pLocked;
+    $("gInput").disabled = $("gAdd").disabled = gLocked;
+    $("pDone").disabled = pLocked || participants.length < 2;
+    $("gDone").disabled = gLocked || goals.length < 1;
+    $("startBtn").disabled = !(pLocked && gLocked);
+  }
+
+  function addP() {
+    const v = $("pInput").value.trim();
+    if (!v || pLocked) return;
+    participants.push({ name: v });
+    $("pInput").value = ""; $("pInput").focus(); refresh();
+  }
+  function addG() {
+    const v = $("gInput").value.trim();
+    if (!v || gLocked) return;
+    goals.push({ label: v });
+    $("gInput").value = ""; $("gInput").focus(); refresh();
+  }
+
+  $("pAdd").onclick = addP;
+  $("gAdd").onclick = addG;
+  $("pInput").addEventListener("keydown", e => { if (e.key === "Enter") addP(); });
+  $("gInput").addEventListener("keydown", e => { if (e.key === "Enter") addG(); });
+  $("pDone").onclick = () => { if (participants.length < 2) return; pLocked = true; refresh(); };
+  $("gDone").onclick = () => { if (goals.length < 1) return; gLocked = true; refresh(); };
+
+  // ---------- 사다리 구성 ----------
+  const canvas = $("canvas"), ctx = canvas.getContext("2d");
+  let cols, W, H, topY, botY, colX, dpr;
+
+  function layout() {
+    cols = participants.length;
+    dpr = window.devicePixelRatio || 1;
+    const cssW = Math.max(cols * 110, 420);
+    const cssH = 460;
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    canvas.style.height = cssH + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    W = cssW; H = cssH;
+    topY = 60; botY = H - 70;
+    const margin = W / (cols * 2);
+    colX = [];
+    for (let i = 0; i < cols; i++) colX.push(margin + (W - 2 * margin) * (i / Math.max(cols - 1, 1)));
+    if (cols === 1) colX = [W / 2];
+  }
+
+  function buildRungs() {
+    rungs = [];
+    const levels = 8 + cols;             // 가로줄 밀도
+    const ys = [];
+    for (let l = 0; l < levels; l++) ys.push(topY + (botY - topY) * (l + 1) / (levels + 1));
+    ys.forEach(y => {
+      // 각 레벨에서 인접하지 않게 가로줄 배치
+      for (let c = 0; c < cols - 1; c++) {
+        if (Math.random() < 0.4) {
+          // 같은 레벨에서 바로 옆에 이미 줄이 있으면 skip
+          if (rungs.some(r => Math.abs(r.y - y) < 1 && (r.col === c - 1 || r.col === c + 1 || r.col === c))) continue;
+          rungs.push({ col: c, y });
+        }
+      }
+    });
+    rungs.sort((a, b) => a.y - b.y);
+  }
+
+  // 한 참여자의 경로 좌표 계산 (꺾인 점들의 배열)
+  function tracePath(startCol) {
+    let col = startCol;
+    const pts = [{ x: colX[col], y: topY }];
+    const sorted = rungs.slice().sort((a, b) => a.y - b.y);
+    for (const r of sorted) {
+      if (r.col === col) {            // 오른쪽으로
+        pts.push({ x: colX[col], y: r.y });
+        col = col + 1;
+        pts.push({ x: colX[col], y: r.y });
+      } else if (r.col === col - 1) { // 왼쪽으로
+        pts.push({ x: colX[col], y: r.y });
+        col = col - 1;
+        pts.push({ x: colX[col], y: r.y });
+      }
+    }
+    pts.push({ x: colX[col], y: botY });
+    return { pts, endCol: col };
+  }
+
+  // ---------- 그리기 ----------
+  const palette = ["#ef4444","#3b82f6","#10b981","#f59e0b","#8b5cf6","#ec4899","#14b8a6","#f97316","#6366f1","#84cc16"];
+  let revealed = [];   // 오픈된 goal index 집합
+  let drawnPaths = []; // {pts, color, progress}
+
+  function goalLabelFor(endCol) {
+    return goals[endCol % goals.length].label;
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // 세로선
+    ctx.lineWidth = 3; ctx.strokeStyle = getCss("--ladder");
+    for (let i = 0; i < cols; i++) {
+      ctx.beginPath(); ctx.moveTo(colX[i], topY); ctx.lineTo(colX[i], botY); ctx.stroke();
+    }
+    // 가로선
+    rungs.forEach(r => {
+      ctx.beginPath(); ctx.moveTo(colX[r.col], r.y); ctx.lineTo(colX[r.col + 1], r.y); ctx.stroke();
+    });
+
+    // 참여자 라벨 (상단)
+    ctx.textAlign = "center"; ctx.font = "bold 14px 'Malgun Gothic',sans-serif";
+    participants.forEach((p, i) => {
+      ctx.fillStyle = getCss("--text");
+      ctx.fillText(p.name, colX[i], topY - 18);
+      ctx.beginPath(); ctx.arc(colX[i], topY, 6, 0, 7); ctx.fillStyle = palette[i % palette.length]; ctx.fill();
+    });
+
+    // Goal 박스 (하단)
+    participants.forEach((p, i) => {
+      const opened = revealed.includes(i);
+      const bx = colX[i] - 42, by = botY + 12, bw = 84, bh = 34;
+      ctx.fillStyle = opened ? "#fffbeb" : "#e2e8f0";
+      ctx.strokeStyle = opened ? getCss("--gold") : getCss("--line");
+      ctx.lineWidth = opened ? 2.5 : 1.5;
+      roundRect(bx, by, bw, bh, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = opened ? "#92400e" : "#94a3b8";
+      ctx.font = opened ? "bold 14px 'Malgun Gothic',sans-serif" : "13px 'Malgun Gothic',sans-serif";
+      ctx.fillText(opened ? goalLabelFor(i) : "❓", colX[i], by + 22);
+    });
+
+    // 진행 경로
+    drawnPaths.forEach(dp => {
+      ctx.strokeStyle = dp.color; ctx.lineWidth = 5; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      const pts = dp.pts;
+      // 전체 길이 기준 progress 만큼 그림
+      const total = pathLength(pts);
+      let target = total * dp.progress, acc = 0;
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        const seg = dist(pts[i-1], pts[i]);
+        if (acc + seg <= target) { ctx.lineTo(pts[i].x, pts[i].y); acc += seg; }
+        else { const t = (target - acc) / seg; ctx.lineTo(pts[i-1].x + (pts[i].x-pts[i-1].x)*t, pts[i-1].y + (pts[i].y-pts[i-1].y)*t); break; }
+      }
+      ctx.stroke();
+    });
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
+  }
+  const dist = (a, b) => Math.hypot(a.x-b.x, a.y-b.y);
+  function pathLength(pts){ let s=0; for(let i=1;i<pts.length;i++) s+=dist(pts[i-1],pts[i]); return s; }
+  function getCss(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+  // ---------- 애니메이션 (한 명씩 순차) ----------
+  const results = [];
+
+  function animateOne(idx, done) {
+    const { pts, endCol } = tracePath(idx);
+    const dp = { pts, color: palette[idx % palette.length], progress: 0 };
+    drawnPaths.push(dp);
+    results[idx] = endCol;
+    const speed = 0.018;
+    function step() {
+      dp.progress = Math.min(1, dp.progress + speed);
+      draw();
+      if (dp.progress < 1) requestAnimationFrame(step);
+      else { revealed.push(endCol); draw(); setTimeout(done, 450); }
+    }
+    requestAnimationFrame(step);
+  }
+
+  function runAll() {
+    let i = 0;
+    function next() {
+      if (i >= cols) { finish(); return; }
+      animateOne(i, () => { i++; next(); });
+    }
+    next();
+  }
+
+  function finish() {
+    running = false;
+    const body = $("resultBody");
+    body.innerHTML = "";
+    participants.forEach((p, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${escapeHtml(p.name)}</td><td><b>${escapeHtml(goals[results[i] % goals.length].label)}</b></td>`;
+      body.appendChild(tr);
+    });
+    $("result").classList.remove("hidden");
+    $("result").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  // ---------- 시작 ----------
+  $("startBtn").onclick = () => {
+    if (running || !(pLocked && gLocked)) return;
+    running = true;
+    revealed = []; drawnPaths = []; results.length = 0;
+    layout(); buildRungs(); draw();
+    $("board").classList.remove("hidden");
+    $("result").classList.add("hidden");
+    $("startBtn").disabled = true;
+    $("board").scrollIntoView({ behavior: "smooth" });
+    setTimeout(runAll, 400);
+  };
+
+  $("resetBtn").onclick = () => location.reload();
+
+  refresh();
+})();
+</script>
+</body>
+</html>

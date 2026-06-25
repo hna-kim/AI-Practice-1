@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>사다리타기 (C/S)</title>
+<style>
+  :root{--bg:#f4f6fb;--panel:#fff;--line:#c9d2e3;--ladder:#94a3b8;--accent:#4f46e5;
+    --accent-soft:#eef2ff;--text:#1e293b;--muted:#64748b;--gold:#f59e0b;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:"Segoe UI","Malgun Gothic",sans-serif;background:var(--bg);color:var(--text);padding:24px;}
+  h1{text-align:center;margin:0 0 4px;font-size:26px;}
+  .sub{text-align:center;color:var(--muted);margin:0 0 6px;font-size:14px;}
+  .server{text-align:center;margin:0 0 18px;font-size:12px;color:var(--muted);}
+  .server b{color:var(--accent);}
+  .wrap{max-width:980px;margin:0 auto;}
+  .setup{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;}
+  .card{flex:1;min-width:280px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;}
+  .card h2{margin:0 0 12px;font-size:16px;}
+  .row{display:flex;gap:8px;margin-bottom:10px;}
+  input[type=text]{flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;}
+  input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent);}
+  button{padding:10px 16px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;transition:.15s;}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  .btn-add{background:var(--accent-soft);color:var(--accent);}
+  .btn-done{background:#10b981;color:#fff;}
+  .btn-start{display:block;width:100%;padding:14px;font-size:17px;background:var(--accent);color:#fff;margin:4px 0 20px;}
+  .btn-reset{background:#f1f5f9;color:var(--muted);}
+  ul.list{list-style:none;margin:0;padding:0;}
+  ul.list li{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--bg);border-radius:7px;margin-bottom:6px;font-size:14px;}
+  ul.list li button{padding:2px 8px;background:#fee2e2;color:#dc2626;font-size:12px;}
+  .tag{font-size:12px;color:var(--muted);}
+  .locked{color:#047857;font-weight:600;}
+  #board{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;}
+  canvas{width:100%;display:block;}
+  #result table{width:100%;border-collapse:collapse;font-size:14px;}
+  #result th,#result td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;}
+  #result th{color:var(--muted);font-weight:600;}
+  .hidden{display:none;}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px;}
+  .err{color:#dc2626;font-size:13px;text-align:center;min-height:18px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🪜 사다리타기 <span style="font-size:14px;color:var(--muted)">C/S</span></h1>
+  <p class="sub">참여자와 점심값(Goal)을 입력하고 '사다리 시작'을 누르세요</p>
+  <p class="server">서버 세션: <b id="sid">연결 중…</b></p>
+  <p class="err" id="err"></p>
+
+  <div class="setup">
+    <div class="card">
+      <h2>참여자 <span class="tag" id="pCount">(0명)</span></h2>
+      <div class="row">
+        <input type="text" id="pInput" placeholder="이름 입력 후 Enter" autocomplete="off">
+        <button class="btn-add" id="pAdd">추가</button>
+        <button class="btn-done" id="pDone">완료</button>
+      </div>
+      <ul class="list" id="pList"></ul>
+      <p class="hint">무한 입력 · '완료'로 확정 (서버 저장)</p>
+    </div>
+    <div class="card">
+      <h2>점심값 Goal <span class="tag" id="gCount">(0개)</span></h2>
+      <div class="row">
+        <input type="text" id="gInput" placeholder="예: 5000, 10000원, 꽝 …" autocomplete="off">
+        <button class="btn-add" id="gAdd">추가</button>
+        <button class="btn-done" id="gDone">완료</button>
+      </div>
+      <ul class="list" id="gList"></ul>
+      <p class="hint">금액 무제한 · 개수 자유 · '완료'로 확정</p>
+    </div>
+  </div>
+
+  <button class="btn-start" id="startBtn" disabled>사다리 시작</button>
+
+  <div id="board" class="hidden"><canvas id="canvas"></canvas></div>
+
+  <div id="result" class="hidden card">
+    <h2>결과</h2>
+    <table><thead><tr><th>참여자</th><th>→ 점심값</th></tr></thead><tbody id="resultBody"></tbody></table>
+    <div class="row" style="margin-top:14px"><button class="btn-reset" id="resetBtn">처음부터 다시</button></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const api = (path, opts) => fetch("/api" + path, Object.assign({headers:{"Content-Type":"application/json"}}, opts))
+      .then(async r => { const j = await r.json(); if(!r.ok) throw new Error(j.error||"서버 오류"); return j; });
+
+  let state = null;          // 서버에서 받은 세션 상태
+  let sessionId = null;
+  let ladder = null;         // start 시 서버가 준 사다리 데이터
+  let running = false;
+
+  function showErr(m){ $("err").textContent = m || ""; }
+
+  // ---------- 세션 초기화 ----------
+  async function init(){
+    try{
+      const j = await api("/session", {method:"POST"});
+      sessionId = j.sessionId; state = j.state;
+      $("sid").textContent = sessionId + " (" + (j.server||"server") + ")";
+      render();
+    }catch(e){ showErr("세션 생성 실패: " + e.message); }
+  }
+
+  async function call(path, body){
+    try{
+      const j = await api("/session/" + sessionId + path, {method:"POST", body: body?JSON.stringify(body):undefined});
+      state = j.state; if(j.ladder) ladder = j.ladder;
+      showErr(""); render(); return j;
+    }catch(e){ showErr(e.message); throw e; }
+  }
+
+  // ---------- 렌더 ----------
+  function renderList(arr, listEl, countEl, unit, locked, kind){
+    listEl.innerHTML = "";
+    arr.forEach((item, i) => {
+      const li = document.createElement("li");
+      const span = document.createElement("span"); span.textContent = item; li.appendChild(span);
+      if(!locked){
+        const del = document.createElement("button"); del.textContent = "삭제";
+        del.onclick = () => call("/remove", {kind, index:i});
+        li.appendChild(del);
+      }
+      listEl.appendChild(li);
+    });
+    countEl.textContent = locked ? `(${arr.length}${unit} 확정)` : `(${arr.length}${unit})`;
+    countEl.className = locked ? "tag locked" : "tag";
+  }
+
+  function render(){
+    if(!state) return;
+    const {participants, goals, pLocked, gLocked} = state;
+    renderList(participants, $("pList"), $("pCount"), "명", pLocked, "participant");
+    renderList(goals, $("gList"), $("gCount"), "개", gLocked, "goal");
+    $("pInput").disabled = $("pAdd").disabled = pLocked;
+    $("gInput").disabled = $("gAdd").disabled = gLocked;
+    $("pDone").disabled = pLocked || participants.length < 2;
+    $("gDone").disabled = gLocked || goals.length < 1;
+    $("startBtn").disabled = !(pLocked && gLocked) || running;
+  }
+
+  // ---------- 입력 이벤트 ----------
+  function addP(){ const v=$("pInput").value.trim(); if(!v)return; $("pInput").value=""; $("pInput").focus(); call("/add",{kind:"participant",value:v}); }
+  function addG(){ const v=$("gInput").value.trim(); if(!v)return; $("gInput").value=""; $("gInput").focus(); call("/add",{kind:"goal",value:v}); }
+  $("pAdd").onclick=addP; $("gAdd").onclick=addG;
+  $("pInput").addEventListener("keydown",e=>{if(e.key==="Enter")addP();});
+  $("gInput").addEventListener("keydown",e=>{if(e.key==="Enter")addG();});
+  $("pDone").onclick=()=>call("/lock",{kind:"participant"});
+  $("gDone").onclick=()=>call("/lock",{kind:"goal"});
+
+  // ---------- 사다리 그리기 (서버 데이터 기반) ----------
+  const canvas=$("canvas"), ctx=canvas.getContext("2d");
+  let W,H,topY,botY,colX,cols,levels,rungs,results;
+  const palette=["#ef4444","#3b82f6","#10b981","#f59e0b","#8b5cf6","#ec4899","#14b8a6","#f97316","#6366f1","#84cc16"];
+  let revealed=[], drawnPaths=[];
+
+  function layout(){
+    cols=ladder.cols; levels=ladder.levels; rungs=ladder.rungs; results=ladder.results;
+    const dpr=window.devicePixelRatio||1;
+    const cssW=Math.max(cols*110,420), cssH=460;
+    canvas.width=cssW*dpr; canvas.height=cssH*dpr; canvas.style.height=cssH+"px";
+    ctx.setTransform(dpr,0,0,dpr,0,0); W=cssW; H=cssH; topY=60; botY=H-70;
+    const margin=W/(cols*2); colX=[];
+    for(let i=0;i<cols;i++) colX.push(margin+(W-2*margin)*(i/Math.max(cols-1,1)));
+    if(cols===1) colX=[W/2];
+  }
+  const levelY = lv => topY + (botY-topY)*(lv+1)/(levels+1);
+
+  function tracePath(startCol){
+    let col=startCol; const pts=[{x:colX[col],y:topY}];
+    const sorted=rungs.slice().sort((a,b)=>a.level-b.level);
+    for(const r of sorted){
+      const y=levelY(r.level);
+      if(r.col===col){ pts.push({x:colX[col],y}); col++; pts.push({x:colX[col],y}); }
+      else if(r.col===col-1){ pts.push({x:colX[col],y}); col--; pts.push({x:colX[col],y}); }
+    }
+    pts.push({x:colX[col],y:botY});
+    return pts;
+  }
+
+  const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  function getCss(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+  function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    ctx.lineWidth=3; ctx.strokeStyle=getCss("--ladder");
+    for(let i=0;i<cols;i++){ctx.beginPath();ctx.moveTo(colX[i],topY);ctx.lineTo(colX[i],botY);ctx.stroke();}
+    rungs.forEach(r=>{const y=levelY(r.level);ctx.beginPath();ctx.moveTo(colX[r.col],y);ctx.lineTo(colX[r.col+1],y);ctx.stroke();});
+    ctx.textAlign="center"; ctx.font="bold 14px 'Malgun Gothic',sans-serif";
+    state.participants.forEach((p,i)=>{ctx.fillStyle=getCss("--text");ctx.fillText(p,colX[i],topY-18);
+      ctx.beginPath();ctx.arc(colX[i],topY,6,0,7);ctx.fillStyle=palette[i%palette.length];ctx.fill();});
+    state.participants.forEach((p,i)=>{
+      const opened=revealed.includes(i), bx=colX[i]-42, by=botY+12, bw=84, bh=34;
+      ctx.fillStyle=opened?"#fffbeb":"#e2e8f0"; ctx.strokeStyle=opened?getCss("--gold"):getCss("--line");
+      ctx.lineWidth=opened?2.5:1.5; roundRect(bx,by,bw,bh,8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=opened?"#92400e":"#94a3b8"; ctx.font=opened?"bold 14px 'Malgun Gothic',sans-serif":"13px 'Malgun Gothic',sans-serif";
+      ctx.fillText(opened?state.goals[i % state.goals.length]:"❓",colX[i],by+22);
+    });
+    drawnPaths.forEach(dp=>{
+      ctx.strokeStyle=dp.color;ctx.lineWidth=5;ctx.lineJoin="round";ctx.lineCap="round";
+      const pts=dp.pts; let total=0; for(let i=1;i<pts.length;i++) total+=dist(pts[i-1],pts[i]);
+      let target=total*dp.progress, acc=0; ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+      for(let i=1;i<pts.length;i++){const seg=dist(pts[i-1],pts[i]);
+        if(acc+seg<=target){ctx.lineTo(pts[i].x,pts[i].y);acc+=seg;}
+        else{const t=(target-acc)/seg;ctx.lineTo(pts[i-1].x+(pts[i].x-pts[i-1].x)*t,pts[i-1].y+(pts[i].y-pts[i-1].y)*t);break;}}
+      ctx.stroke();
+    });
+  }
+
+  function animateOne(idx,done){
+    const pts=tracePath(idx), dp={pts,color:palette[idx%palette.length],progress:0}; drawnPaths.push(dp);
+    const endCol=results[idx], speed=0.018;
+    (function step(){ dp.progress=Math.min(1,dp.progress+speed); draw();
+      if(dp.progress<1) requestAnimationFrame(step);
+      else{ revealed.push(endCol); draw(); setTimeout(done,450); } })();
+  }
+  function runAll(){ let i=0; (function next(){ if(i>=cols){finish();return;} animateOne(i,()=>{i++;next();}); })(); }
+  function finish(){
+    running=false; render();
+    const body=$("resultBody"); body.innerHTML="";
+    state.participants.forEach((p,i)=>{
+      const tr=document.createElement("tr");
+      const g=state.goals[results[i] % state.goals.length];
+      tr.innerHTML=`<td>${esc(p)}</td><td><b>${esc(g)}</b></td>`; body.appendChild(tr);
+    });
+    $("result").classList.remove("hidden"); $("result").scrollIntoView({behavior:"smooth"});
+  }
+  function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+  $("startBtn").onclick=async()=>{
+    if(running) return;
+    try{ await call("/start"); }catch(e){ return; }
+    running=true; revealed=[]; drawnPaths=[];
+    layout(); draw();
+    $("board").classList.remove("hidden"); $("result").classList.add("hidden");
+    $("startBtn").disabled=true; $("board").scrollIntoView({behavior:"smooth"});
+    setTimeout(runAll,400);
+  };
+  $("resetBtn").onclick=async()=>{
+    running=false; ladder=null; revealed=[]; drawnPaths=[];
+    $("board").classList.add("hidden"); $("result").classList.add("hidden");
+    await call("/reset");
+  };
+
+  init();
+})();
+</script>
+</body>
+</html>

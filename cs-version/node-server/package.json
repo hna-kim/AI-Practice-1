@@ -1,0 +1,12 @@
+{
+  "name": "ladder-cs-node",
+  "version": "1.0.0",
+  "description": "사다리타기 C/S - Node.js + Express",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
